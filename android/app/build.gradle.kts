@@ -8,6 +8,21 @@ android {
     namespace = "com.hmdeepseek.app"
     compileSdk = 34
 
+    // 仓库里带了一张共用的 debug 证书（android/keystore/debug.jks），
+    // 让本机、CI、dist/ 里的 APK 使用同一张证书，互相覆盖安装不会签名冲突。
+    val sharedKeystore = rootProject.file("keystore/debug.jks")
+
+    signingConfigs {
+        if (sharedKeystore.exists()) {
+            create("sharedDebug") {
+                storeFile = sharedKeystore
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
+            }
+        }
+    }
+
     defaultConfig {
         applicationId = "com.hmdeepseek.app"
         minSdk = 26
@@ -17,6 +32,11 @@ android {
     }
 
     buildTypes {
+        getByName("debug") {
+            if (sharedKeystore.exists()) {
+                signingConfig = signingConfigs.getByName("sharedDebug")
+            }
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")

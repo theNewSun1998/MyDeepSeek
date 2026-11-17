@@ -1,14 +1,13 @@
 ﻿<#
 .SYNOPSIS
-    本机一键打 APK（用仓库里 .build/ 下已经准备好的 JDK 17 + Android SDK + Gradle）。
+    本机一键打 APK（用仓库里 .build/ 下已准备好的 JDK 17 + Android SDK + Gradle）。
 
 .DESCRIPTION
-    不依赖 Android Studio、也不会去写 C:\Users\<you>\.android（某些环境没权限）。
-    签名用 .build/keystore/debug.jks，通过 AGP 的注入式签名参数传进去。
-    第一次跑会下载依赖（约 300 MB），之后增量构建约 1 分钟。
+    签名用仓库自带 android/keystore/debug.jks（与 CI、dist/ 里的包是同一张证书）。
+    不依赖 Android Studio，也不会去写 C:\Users\<you>\.android（某些环境没写权限）。
 
 .EXAMPLE
-    pwsh -File android/build.ps1
+    & .\android\build.ps1
 #>
 [CmdletBinding()]
 param(
@@ -17,16 +16,15 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$repo = Split-Path -Parent $PSScriptRoot          # 仓库根
+$repo = Split-Path -Parent $PSScriptRoot
 $root = Join-Path $repo '.build'
 $jdk = Join-Path $root 'jdk\jdk-17.0.21+9'
 $sdk = Join-Path $root 'sdk'
 $gradle = Join-Path $root 'gradle\gradle-8.7\bin\gradle.bat'
-$keystore = Join-Path $root 'keystore\debug.jks'
 
-foreach ($p in @($jdk, $sdk, $gradle, $keystore)) {
+foreach ($p in @($jdk, $sdk, $gradle)) {
     if (-not (Test-Path $p)) {
-        throw "缺少 $p —— 先按 README 的「本机构建」准备工具链（JDK 17 / Android SDK 34 / Gradle 8.7 / debug keystore）。"
+        throw "缺少 $p —— 先准备工具链：JDK 17 / Android SDK 34 / Gradle 8.7（放 .build/ 下）。"
     }
 }
 
@@ -42,11 +40,7 @@ Push-Location $PSScriptRoot
 try {
     & $gradle $Task --console=plain `
         "-Dorg.gradle.native.dir=$root\native" `
-        "-Djava.io.tmpdir=$root\tmp" `
-        "-Pandroid.injected.signing.store.file=$keystore" `
-        "-Pandroid.injected.signing.store.password=android" `
-        "-Pandroid.injected.signing.key.alias=androiddebugkey" `
-        "-Pandroid.injected.signing.key.password=android"
+        "-Djava.io.tmpdir=$root\tmp"
     if ($LASTEXITCODE -ne 0) { throw "构建失败（exit $LASTEXITCODE）" }
 }
 finally {
