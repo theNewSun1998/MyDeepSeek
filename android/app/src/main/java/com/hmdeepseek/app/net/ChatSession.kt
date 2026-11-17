@@ -113,6 +113,17 @@ class ChatSession(
         job?.cancel()
     }
 
+    /** 切换会话时用：掐掉在跑的流，但不改已保存的内容 */
+    fun abort() {
+        synchronized(lock) {
+            call?.cancel()
+            call = null
+            job?.cancel()
+            job = null
+            streaming = false
+        }
+    }
+
     // ------------------------------------------------------------ 内部
 
     private fun resetAccumulators() {

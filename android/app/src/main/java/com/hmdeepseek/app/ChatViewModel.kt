@@ -61,9 +61,14 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     )
 
     fun load(id: String?) {
-        val conv: Conversation = when {
-            id.isNullOrEmpty() -> store.create()
-            else -> store.find(id) ?: store.create()
+        // 切换会话时先把上一条流掐掉
+        session.abort()
+        pendingTranscript = null
+        // 新对话：先只放内存里，等发出第一条消息再落库（和官方 App 一致）
+        val conv: Conversation = if (id.isNullOrEmpty()) {
+            Conversation()
+        } else {
+            store.find(id) ?: Conversation()
         }
         attachments = emptyList()
         searchOn = store.settings.searchDefault
@@ -105,30 +110,37 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         attachments = attachments.filterIndexed { i, _ -> i != index }
     }
 
-    fun attach(uri: Uri) {
-        if (!store.hasKey()) return
+    fun attach(uri: Uri) = attachAll(listOf(uri))
+
+    /** 拍照 / 相册多选 / 文件，统一走这里：读字节 → 上传 → 换 file_id */
+    fun attachAll(uris: List<Uri>) {
+        if (!store.hasKey() || uris.isEmpty()) return
         val resolver = getApplication<Application>().contentResolver
-        val name = queryFileName(uri) ?: "file"
-        val placeholder = Attachment(name = name, uploading = true)
-        attachments = attachments + placeholder
-        uploading = true
         viewModelScope.launch {
-            val result = runCatching {
-                val bytes = resolver.openInputStream(uri)?.use { it.readBytes() }
-                    ?: throw IllegalStateException("读取文件失败")
-                DeepSeekApi.uploadFile(store.settings, bytes, name, store.settings.parsePurpose)
-            }.getOrElse {
-                DeepSeekApi.UploadResult(error = "上传失败：${it.message ?: "未知错误"}")
-            }
-            attachments = attachments.map { a ->
-                if (a.name == placeholder.name && a.uploading) {
-                    if (result.ok) {
-                        a.copy(fileId = result.fileId, sizeBytes = result.bytes, uploading = false)
+            uploading = true
+            for (uri in uris) {
+                val name = queryFileName(uri) ?: "file"
+                val placeholder = Attachment(name = name, uploading = true)
+                attachments = attachments + placeholder
+
+                val result = runCatching {
+                    val bytes = resolver.openInputStream(uri)?.use { it.readBytes() }
+                        ?: throw IllegalStateException("读取文件失败")
+                    DeepSeekApi.uploadFile(store.settings, bytes, name, store.settings.parsePurpose)
+                }.getOrElse {
+                    DeepSeekApi.UploadResult(error = "上传失败：${it.message ?: "未知错误"}")
+                }
+
+                attachments = attachments.map { a ->
+                    if (a.name == placeholder.name && a.uploading) {
+                        if (result.ok) {
+                            a.copy(fileId = result.fileId, sizeBytes = result.bytes, uploading = false)
+                        } else {
+                            a.copy(uploading = false, errorText = result.error)
+                        }
                     } else {
-                        a.copy(uploading = false, errorText = result.error)
+                        a
                     }
-                } else {
-                    a
                 }
             }
             uploading = false
@@ -193,6 +205,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     fun hasKey(): Boolean = store.hasKey()
 
     fun conversations(): List<Conversation> = store.sorted()
+
+    /** 侧边栏搜索：标题 + 消息正文 */
+    fun searchConversations(query: String): List<Conversation> = store.search(query)
 
     fun createConversation(): String = store.create().id
 

@@ -62,6 +62,21 @@ class Store private constructor(context: Context) {
 
     fun sorted(): List<Conversation> = conversations.sortedByDescending { it.updatedAt }
 
+    /** 侧边栏搜索：标题命中，或任意一条消息正文/思考内容命中 */
+    fun search(query: String): List<Conversation> {
+        val q = query.trim().lowercase()
+        if (q.isEmpty()) return sorted()
+        return conversations
+            .filter { conv ->
+                conv.title.lowercase().contains(q) ||
+                    conv.messages.any { msg ->
+                        msg.text.lowercase().contains(q) ||
+                            msg.thinking.lowercase().contains(q)
+                    }
+            }
+            .sortedByDescending { it.updatedAt }
+    }
+
     fun find(id: String): Conversation? = conversations.firstOrNull { it.id == id }
 
     fun create(): Conversation {

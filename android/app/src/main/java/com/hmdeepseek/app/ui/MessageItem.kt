@@ -119,7 +119,9 @@ private fun AssistantBody(
 ) {
     Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
 
-        if (msg.thinking.isNotEmpty() || (streaming && msg.text.isEmpty() && msg.steps.isEmpty())) {
+        // 只有真的收到 thinking 内容才显示「已深度思考」；
+        // 关掉深度思考时不能空刷这张卡
+        if (msg.thinking.isNotEmpty()) {
             ThinkingCard(msg)
         }
 

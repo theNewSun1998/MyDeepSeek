@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- 拍照临时文件的存放位置：应用缓存目录 -->
+    <cache-path name="camera" path="camera/" />
+    <cache-path name="cache" path="." />
+</paths>
