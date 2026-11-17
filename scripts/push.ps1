@@ -4,8 +4,8 @@
 
 .DESCRIPTION
     为什么需要这个脚本：
-      本机 .gitconfig 里配了 http.https://github.com/.proxy=127.0.0.1:17890，
-      但那个代理并没有运行，直连反而正常 —— 脚本里所有 git 调用都加
+      本机通过 127.0.0.1:17890 的代理访问 GitHub（直连经常被重置），
+      脚本默认所有 git 调用都走代理，传 -Proxy '' 可强制直连。
       -c "http.https://github.com/.proxy=" 覆盖掉。
 
     HTTPS 方式：系统级 credential.helper=manager，推送时会弹浏览器让你登录 GitHub，
@@ -24,6 +24,7 @@ param(
     [string]$Repo = 'MyDeepSeek',
     [ValidateSet('https', 'ssh')]
     [string]$Method = 'https',
+    [string]$Proxy = 'http://127.0.0.1:17890',
     [string]$SshKey = "$env:USERPROFILE\.ssh\arkham_deploy",
     [switch]$Force
 )
@@ -40,9 +41,17 @@ if ($Method -eq 'ssh') {
     $remoteUrl = "https://github.com/$Owner/$Repo.git"
 }
 
+# 走本地代理 17890 访问 GitHub（直连经常被重置）；-Proxy '' 则强制直连
+$gitProxyArgs = @()
+if ([string]::IsNullOrWhiteSpace($Proxy)) {
+    $gitProxyArgs = @('-c', 'http.https://github.com/.proxy=')
+} else {
+    $gitProxyArgs = @('-c', "http.https://github.com/.proxy=$Proxy", '-c', "http.proxy=$Proxy")
+}
+
 function Invoke-Git {
     param([string[]]$GitArgs)
-    & git -c "http.https://github.com/.proxy=" @GitArgs
+    & git @($gitProxyArgs + $GitArgs)
     if ($LASTEXITCODE -ne 0) {
         Write-Host ""
         Write-Host "git $($GitArgs -join ' ') 失败（exit $LASTEXITCODE）" -ForegroundColor Red

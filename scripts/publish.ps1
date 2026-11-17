@@ -13,8 +13,8 @@
       & .\scripts\publish.ps1 -Owner theNewSun1998 -Repo hmdeepseek -Visibility public
 
     说明：
-      * 本机 .gitconfig 里有个失效代理（127.0.0.1:17890），git 调用都带
-        -c "http.https://github.com/.proxy=" 覆盖，避免 "Failed to connect ... over proxy"。
+      * 默认走本机代理 127.0.0.1:17890，传 -Proxy '' 可强制直连。
+
       * 仓库已存在时会跳过创建直接推送。
       * 推送用的 token 写在一次性 URL 里，推完立刻把 remote 换回干净地址。
 #>
@@ -38,9 +38,17 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $repoRoot
 $cleanUrl = "https://github.com/$Owner/$Repo.git"
 
+# 走本地代理 17890 访问 GitHub（直连经常被重置）；-Proxy '' 则强制直连
+$gitProxyArgs = @()
+if ([string]::IsNullOrWhiteSpace($Proxy)) {
+    $gitProxyArgs = @('-c', 'http.https://github.com/.proxy=')
+} else {
+    $gitProxyArgs = @('-c', "http.https://github.com/.proxy=$Proxy", '-c', "http.proxy=$Proxy")
+}
+
 function Invoke-Git {
     param([string[]]$GitArgs)
-    & git -c "http.https://github.com/.proxy=" @GitArgs
+    & git @($gitProxyArgs + $GitArgs)
     if ($LASTEXITCODE -ne 0) { throw "git $($GitArgs -join ' ') 失败（exit $LASTEXITCODE）" }
 }
 
