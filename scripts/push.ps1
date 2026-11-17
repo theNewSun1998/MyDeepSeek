@@ -42,7 +42,7 @@ if ($Method -eq 'ssh') {
 
 function Invoke-Git {
     param([string[]]$GitArgs)
-    & git -c "http.https://github.com/.proxy=" -c "https://github.com/.proxy=" @GitArgs
+    & git -c "http.https://github.com/.proxy=" @GitArgs
     if ($LASTEXITCODE -ne 0) {
         Write-Host ""
         Write-Host "git $($GitArgs -join ' ') 失败（exit $LASTEXITCODE）" -ForegroundColor Red
