@@ -2,7 +2,7 @@ name: build-apk
 
 # 云端打包：不用在本地装 Android Studio / SDK。
 # 推送到 main 或打 tag（v0.1.0 这种）时构建 debug APK；
-# tag 触发时会额外把 APK 挂到 Releases，手机上直接点链接装。
+# tag 触发时把 APK 挂到 Releases，手机上直接点链接装。
 # 也可以在 Actions 页面手动 Run workflow。
 
 on:
@@ -13,6 +13,7 @@ on:
 
 permissions:
   contents: write
+  issues: write
 
 jobs:
   build:
@@ -27,22 +28,32 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      # 直接装指定版本 Gradle，避免依赖第三方 action
+      - name: Install Gradle 8.7
+        run: |
+          curl -fsSL -o /tmp/gradle.zip https://services.gradle.org/distributions/gradle-8.7-bin.zip
+          sudo unzip -q /tmp/gradle.zip -d /opt
+          echo "/opt/gradle-8.7/bin" >> "$GITHUB_PATH"
 
-      - name: Set up Gradle 8.7
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.7'
+      - name: Show environment
+        run: |
+          java -version
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+          ls "${ANDROID_HOME:-/usr/local/lib/android/sdk}/platforms" || true
+          ls "${ANDROID_HOME:-/usr/local/lib/android/sdk}/build-tools" || true
+          gradle --version
 
       - name: Build debug APK
         working-directory: android
-        run: gradle assembleDebug --no-daemon --stacktrace
+        run: |
+          set -o pipefail
+          gradle assembleDebug --console=plain --stacktrace 2>&1 | tee ../build.log
 
       - name: Collect APK
         run: |
           mkdir -p out
-          cp android/app/build/outputs/apk/debug/*.apk out/app-debug.apk
+          cp android/app/build/outputs/apk/debug/app-debug.apk out/app-debug.apk
           ls -lh out/
 
       - name: Upload artifact
@@ -53,10 +64,21 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Attach to release (tags only)
+      # 失败时把日志贴成一个 issue，方便公开读取排查（Actions 日志需要登录）
+      - name: Report failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tail -n 150 build.log > /tmp/tail.log 2>/dev/null || echo "no build.log" > /tmp/tail.log
+          gh issue create \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "CI build failed: run ${{ github.run_id }}" \
+            --body "$(printf '```\n'; cat /tmp/tail.log; printf '\n```\n')" || true
+
+      - name: Publish release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           files: out/app-debug.apk
-          overwrite_files: true
           generate_release_notes: true
