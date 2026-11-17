@@ -1,0 +1,30 @@
+# 本地构建链（JDK 17 / Android SDK / Gradle / keystore，约 1.5 GB，不入库）
+.build/
+*.zip
+.stage-*/
+
+# Android
+.gradle/
+.idea/
+build/
+captures/
+*.iml
+local.properties
+.externalNativeBuild/
+.cxx/
+
+# HarmonyOS / DevEco
+.hvigor/
+oh_modules/
+*.hap
+*.hsp
+*.har
+
+# 归档的旧实现（网页套壳版）
+archive/**/node_modules/
+
+# misc
+node_modules/
+*.log
+.DS_Store
+Thumbs.db

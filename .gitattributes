@@ -1,0 +1,21 @@
+# 统一换行符，避免 Windows 上提交后到处显示改动
+* text=auto eol=lf
+
+# 二进制文件：别做文本 diff
+*.apk binary
+*.jar binary
+*.png binary
+*.jpg binary
+*.webp binary
+*.zip binary
+*.jks binary
+*.keystore binary
+
+# Gradle / 脚本保持各自习惯
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+*.gradle.kts text eol=lf
+
+# 语言统计
+android/**/*.kt linguist-language=Kotlin
+entry/**/*.ets linguist-language=TypeScript

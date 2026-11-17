@@ -1,0 +1,20 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "DeepSeek chat client shell"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "DeepSeek chat client shell"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "DeepSeek"
+    },
+    {
+      "name": "reason_microphone",
+      "value": "用于语音输入：把你说的话转成文字发送给 DeepSeek"
+    }
+  ]
+}

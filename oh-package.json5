@@ -1,0 +1,11 @@
+{
+  "modelVersion": "5.0.0",
+  "name": "hmdeepseek",
+  "version": "0.1.0",
+  "description": "HarmonyOS ArkWeb shell for the official DeepSeek chat-demo frontend",
+  "main": "",
+  "author": "",
+  "license": "Apache-2.0",
+  "dependencies": {},
+  "devDependencies": {}
+}
