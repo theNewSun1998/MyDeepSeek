@@ -49,7 +49,7 @@ object DeepSeekApi {
         call: StreamCall,
         onEvent: (String, String) -> Unit,
         onDone: (stopped: Boolean) -> Unit,
-        onError: (String) -> Unit
+        onError: (message: String, httpCode: Int) -> Unit
     ) = withContext(Dispatchers.IO) {
         var conn: HttpURLConnection? = null
         try {
@@ -71,7 +71,7 @@ object DeepSeekApi {
             if (code != HttpURLConnection.HTTP_OK) {
                 val err = runCatching { conn.errorStream?.bufferedReader()?.use { r -> r.readText() } ?: "" }
                     .getOrDefault("")
-                onError(friendlyError(code, err))
+                onError(friendlyError(code, err), code)
                 return@withContext
             }
 
@@ -87,7 +87,7 @@ object DeepSeekApi {
             if (call.cancelled) {
                 onDone(true)
             } else {
-                onError("网络错误：${e.message ?: e.javaClass.simpleName}")
+                onError("网络错误：${e.message ?: e.javaClass.simpleName}", 0)
             }
         } finally {
             runCatching { conn?.disconnect() }

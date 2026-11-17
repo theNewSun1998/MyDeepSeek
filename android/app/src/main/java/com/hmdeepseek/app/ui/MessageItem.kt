@@ -34,6 +34,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.hmdeepseek.app.common.Pricing
 import com.hmdeepseek.app.model.Attachment
 import com.hmdeepseek.app.model.ChatMessage
 import com.hmdeepseek.app.model.Citation
@@ -75,7 +76,7 @@ private fun UserBubble(msg: ChatMessage) {
             modifier = Modifier
                 .widthIn(max = 300.dp)
                 .clip(RoundedCornerShape(18.dp))
-                .background(AppColor.brand)
+                .background(AppColor.userBubble)
                 .padding(horizontal = 14.dp, vertical = 10.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
@@ -84,26 +85,26 @@ private fun UserBubble(msg: ChatMessage) {
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(8.dp))
-                        .background(AppColor.bubblePressed)
+                        .background(AppColor.userBubbleSoft)
                         .padding(horizontal = 8.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
                         text = att.name,
                         fontSize = 12.sp,
-                        color = androidx.compose.ui.graphics.Color(0xFFE8EDFF),
+                        color = AppColor.userText,
                         maxLines = 1,
                         modifier = Modifier.weight(1f)
                     )
                     Text(
                         text = formatSize(att.sizeBytes),
                         fontSize = 11.sp,
-                        color = androidx.compose.ui.graphics.Color(0xFFC7D2FE)
+                        color = AppColor.userSubText
                     )
                 }
             }
             if (msg.text.isNotEmpty()) {
-                Text(text = msg.text, fontSize = 16.sp, lineHeight = 24.sp, color = androidx.compose.ui.graphics.Color.White)
+                Text(text = msg.text, fontSize = 16.sp, lineHeight = 24.sp, color = AppColor.userText)
             }
         }
     }
@@ -129,13 +130,29 @@ private fun AssistantBody(
             StepsCard(msg, onOpenUrl)
         }
 
+        // 正在联网但还没有正文：显示实时进度（对应原版「正在搜索 / 正在阅读」）
+        if (streaming && msg.text.isEmpty() && msg.steps.isNotEmpty()) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                CircularProgressIndicator(modifier = Modifier.size(14.dp), color = AppColor.brand, strokeWidth = 2.dp)
+                Text(liveStatus(msg), fontSize = 13.sp, color = AppColor.textSub)
+            }
+        }
+
         if (msg.text.isNotEmpty()) {
-            MarkdownView(msg.text)
+            MarkdownView(
+                content = injectCitationMarkers(msg.text, msg.citations),
+                citations = msg.citations,
+                onOpenUrl = onOpenUrl
+            )
         } else if (streaming && msg.steps.isEmpty() && msg.thinking.isEmpty()) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 CircularProgressIndicator(modifier = Modifier.size(16.dp), color = AppColor.brand, strokeWidth = 2.dp)
                 Text("正在回答…", fontSize = 14.sp, color = AppColor.textSub)
             }
+        }
+
+        if (msg.compressedNote.isNotEmpty()) {
+            Notice(msg.compressedNote, AppColor.textFaint)
         }
 
         when (msg.status) {
@@ -355,7 +372,41 @@ private fun ActionRow(msg: ChatMessage, isLast: Boolean, onRegenerate: () -> Uni
             )
         }
         Spacer(Modifier.weight(1f))
+        if (!msg.usage.isEmpty) {
+            Text(usageLine(msg), fontSize = 10.sp, color = AppColor.textFaint)
+            Spacer(Modifier.width(10.dp))
+        }
         Text(formatClock(msg.createdAt), fontSize = 11.sp, color = AppColor.textFaint)
+    }
+}
+
+/** 单条回答的用量：↑输入 ↓输出 · 搜索/抓页次数 */
+private fun usageLine(msg: ChatMessage): String {
+    val u = msg.usage
+    val sb = StringBuilder()
+    if (u.inputTokens > 0) sb.append("↑").append(Pricing.formatTokens(u.inputTokens.toLong()))
+    if (u.outputTokens > 0) {
+        if (sb.isNotEmpty()) sb.append(" ")
+        sb.append("↓").append(Pricing.formatTokens(u.outputTokens.toLong()))
+    }
+    val tools = u.searchCount + u.fetchCount
+    if (tools > 0) {
+        if (sb.isNotEmpty()) sb.append(" · ")
+        sb.append("工具 ").append(tools)
+    }
+    return sb.toString()
+}
+
+/** 流式中的实时状态文案 */
+private fun liveStatus(msg: ChatMessage): String {
+    val searches = msg.steps.count { it.action == "search" }
+    val fetches = msg.steps.count { it.action == "read_link" || it.action == "open_page" }
+    val hits = msg.steps.sumOf { it.hits.size }
+    return when {
+        hits > 0 -> "正在阅读 $hits 个网页…"
+        fetches > 0 -> "正在打开网页…"
+        searches > 0 -> "正在联网搜索…"
+        else -> "正在处理…"
     }
 }
 

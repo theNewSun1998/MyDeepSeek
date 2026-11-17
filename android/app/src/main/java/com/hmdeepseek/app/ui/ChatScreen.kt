@@ -28,13 +28,16 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.rememberDrawerState
@@ -95,6 +98,8 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
     var query by remember { mutableStateOf("") }
     var convs by remember { mutableStateOf<List<Conversation>>(emptyList()) }
     var pendingCameraUri by remember { mutableStateOf<Uri?>(null) }
+    var renameTarget by remember { mutableStateOf<Conversation?>(null) }
+    var renameText by remember { mutableStateOf("") }
 
     LaunchedEffect(Unit) { vm.load(null) }
 
@@ -119,6 +124,19 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
     val askMic = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted: Boolean ->
         if (granted) vm.startRecording()
     }
+    val importChats = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
+        if (uri != null) {
+            runCatching {
+                val text = context.contentResolver.openInputStream(uri)
+                    ?.bufferedReader()?.use { it.readText() } ?: ""
+                val result = vm.importJson(text)
+                Toast.makeText(context, "导入完成：${result.first} 条，跳过 ${result.second} 条", Toast.LENGTH_LONG).show()
+                convs = vm.searchConversations(query)
+            }.onFailure {
+                Toast.makeText(context, "导入失败：${it.message ?: "文件格式不对"}", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
 
     fun dismissInput() {
         focusManager.clearFocus()
@@ -140,6 +158,23 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
     fun openUrl(url: String) {
         if (url.isEmpty()) return
         runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
+    }
+
+    fun exportChats() {
+        runCatching {
+            val dir = File(context.cacheDir, "exports").apply { mkdirs() }
+            val file = File(dir, "hmdeepseek-backup-${System.currentTimeMillis()}.json")
+            file.writeText(vm.exportJson())
+            val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+            val send = Intent(Intent.ACTION_SEND).apply {
+                type = "application/json"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            context.startActivity(Intent.createChooser(send, "导出会话备份"))
+        }.onFailure {
+            Toast.makeText(context, "导出失败：${it.message ?: "未知错误"}", Toast.LENGTH_LONG).show()
+        }
     }
 
     ModalNavigationDrawer(
@@ -170,6 +205,14 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
                     onDelete = { id ->
                         vm.deleteConversation(id)
                         convs = vm.searchConversations(query)
+                    },
+                    onPin = { conv ->
+                        vm.togglePin(conv.id)
+                        convs = vm.searchConversations(query)
+                    },
+                    onRename = { conv ->
+                        renameText = conv.title
+                        renameTarget = conv
                     },
                     onOpenSettings = onOpenSettings
                 )
@@ -218,6 +261,37 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
                                 moreMenu = false
                                 vm.load(null)
                                 draft = TextFieldValue("")
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("重命名对话") },
+                            onClick = {
+                                moreMenu = false
+                                val current = vm.conversations().firstOrNull { it.id == vm.convId }
+                                renameText = current?.title ?: ""
+                                renameTarget = current
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text(if (vm.isPinned(vm.convId)) "取消置顶" else "置顶对话") },
+                            onClick = {
+                                moreMenu = false
+                                vm.togglePin(vm.convId)
+                                convs = vm.searchConversations(query)
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("导出会话备份") },
+                            onClick = {
+                                moreMenu = false
+                                exportChats()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("导入会话备份") },
+                            onClick = {
+                                moreMenu = false
+                                importChats.launch(arrayOf("*/*"))
                             }
                         )
                         DropdownMenuItem(
@@ -356,6 +430,33 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
         }
     }
 
+    val editing = renameTarget
+    if (editing != null) {
+        AlertDialog(
+            onDismissRequest = { renameTarget = null },
+            title = { Text("重命名对话", fontSize = 16.sp) },
+            text = {
+                OutlinedTextField(
+                    value = renameText,
+                    onValueChange = { renameText = it },
+                    singleLine = true,
+                    label = { Text("标题") }
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.renameConversation(editing.id, renameText)
+                    renameTarget = null
+                    convs = vm.searchConversations(query)
+                    if (editing.id == vm.convId) vm.load(editing.id)
+                }) { Text("保存") }
+            },
+            dismissButton = {
+                TextButton(onClick = { renameTarget = null }) { Text("取消") }
+            }
+        )
+    }
+
     LaunchedEffect(vm.pendingTranscript) {
         val text = vm.consumeTranscript() ?: return@LaunchedEffect
         val current = draft.text
@@ -407,6 +508,8 @@ private fun DrawerPanel(
     onNewChat: () -> Unit,
     onSelect: (String) -> Unit,
     onDelete: (String) -> Unit,
+    onPin: (Conversation) -> Unit,
+    onRename: (Conversation) -> Unit,
     onOpenSettings: () -> Unit
 ) {
     Column(modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
@@ -463,7 +566,9 @@ private fun DrawerPanel(
                         conv = conv,
                         selected = conv.id == currentId,
                         onClick = { onSelect(conv.id) },
-                        onDelete = { onDelete(conv.id) }
+                        onDelete = { onDelete(conv.id) },
+                        onPin = { onPin(conv) },
+                        onRename = { onRename(conv) }
                     )
                 }
             }
@@ -489,7 +594,9 @@ private fun DrawerItem(
     conv: Conversation,
     selected: Boolean,
     onClick: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    onPin: () -> Unit,
+    onRename: () -> Unit
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     Row(
@@ -501,6 +608,9 @@ private fun DrawerItem(
             .padding(start = 10.dp, end = 4.dp, top = 10.dp, bottom = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
+        if (conv.pinned) {
+            Text("📌", fontSize = 10.sp, modifier = Modifier.padding(end = 4.dp))
+        }
         Text(
             text = conv.title,
             fontSize = 14.sp,
@@ -518,6 +628,20 @@ private fun DrawerItem(
                 modifier = Modifier.clickable { menuOpen = true }
             )
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                DropdownMenuItem(
+                    text = { Text(if (conv.pinned) "取消置顶" else "置顶") },
+                    onClick = {
+                        menuOpen = false
+                        onPin()
+                    }
+                )
+                DropdownMenuItem(
+                    text = { Text("重命名") },
+                    onClick = {
+                        menuOpen = false
+                        onRename()
+                    }
+                )
                 DropdownMenuItem(
                     text = { Text("删除对话") },
                     onClick = {

@@ -14,16 +14,16 @@
 ## 下载安装
 
 
-**现成 APK：[`dist/hmdeepseek-debug.apk`](dist/hmdeepseek-debug.apk)**（9.24 MB）
+**现成 APK：[`dist/hmdeepseek-debug.apk`](dist/hmdeepseek-debug.apk)**（9.49 MB）
 
 | 项 | 值 |
 | --- | --- |
 | 包名 | `com.hmdeepseek.app` |
 | 应用名 | DeepSeek |
-| 版本 | 0.2.0（versionCode 2） |
+| 版本 | 0.3.0（versionCode 3） |
 | 适用 | Android 8.0+（`minSdk 26`），`targetSdk 34` |
 | 签名 | debug（`CN=Android Debug`，证书 SHA-256 `8526c771…`）；与 CI 产出的包同一张证书，可互相覆盖升级 |
-| SHA256 | `0E1E7A58CE99400A8A9FB8AD805E0762DA36A064F8F9EC48AE24CA5D48A6BB89` |
+| SHA256 | `81ADC7649B8738C6D7560C7FA379823860289B85CB7EB81DF55160E009C3310A` |
 
 安装方式任选：
 
@@ -42,11 +42,20 @@
 | 流式回答 | `POST /anthropic/v1/messages`，自己解 SSE（含 `: keep-alive`） |
 | 深度思考折叠卡 | `thinking` block，「已深度思考 · 用时 N 秒」 |
 | 「已搜索 N 个网页」卡片 | `server_tool_use` / `web_search_tool_result`，展开可见查询词、站点、摘要，点条目开浏览器 |
-| 参考来源 | `citations` → 折叠列表，默认收起，展开后逐条可点 |
+| 参考来源 | `citations` → 折叠列表，默认收起，展开后逐条可点；正文里的 `[1][2]` 是**可点上标** |
 | 读用户给的链接 | `deepseek_read_url` |
 | 传文件（PDF/Word/PPT/图） | `POST /files` 拿 `file_id` → `document` block（自动带 beta 头） |
 | 语音输入 | 麦克风圆形按钮按住说话，`AudioRecord` 录 16k PCM → 封 WAV → `POST /v1/tools/asr`，转写结果插入光标末尾 |
 | 附件入口 | ＋ 号弹出「拍照 / 相册 / 文件」三个选项（相机走 FileProvider 临时文件） |
+| 后台保活 | 生成中起前台服务 + 常驻通知，切后台/息屏不中断 |
+| 断线重试 | 网络中断 / 429 / 5xx 自动退避重试 2 次 |
+| 自动压缩 | 历史超「压缩线」就省略最早消息并在 system 里说明；压缩线可在设置里调 |
+| 工具上限 | 单轮搜索+抓页超过上限自动收口，防一轮烧太多 |
+| Markdown | 表格、代码高亮、代码块单独复制 |
+| 公式 | LaTeX 简版渲染（`$..$` / `$$..$$`，符号与上下标转 Unicode） |
+| 深色主题 | 跟随系统 / 浅色 / 深色 |
+| 会话整理 | 重命名、置顶；导出 / 导入 JSON 备份 |
+| 用量统计 | 累计 token、搜索/抓页次数，按官网峰谷价折算金额 |
 | 侧边栏 | 左侧抽屉：新建对话、**搜索对话（标题 + 消息正文）**、历史列表、设置入口 |
 | 默认界面 | 启动即新建对话页（欢迎语 + 输入框），与官方 App 一致 |
 | 输入体验 | 发送后自动收起键盘、退出输入状态 |
@@ -88,7 +97,9 @@ hmdeepseek/
 │   │   ├── model/Types.kt          # 数据模型 + JSON 编解码
 │   │   ├── data/Store.kt           # SharedPreferences 存设置与会话
 │   │   ├── net/DeepSeekApi.kt      # HTTP：SSE 流、multipart 上传、ASR、查余额
-│   │   ├── net/ChatSession.kt      # 一轮对话状态机：拼请求 → 解块 → 回传原样 JSON
+│   │   ├── net/ChatSession.kt      # 一轮对话状态机：拼请求 → 解块 → 回传原样 JSON、压缩、重试、用量
+│   │   ├── common/Pricing.kt       # 峰谷价与花费估算、token 估算
+│   │   ├── service/KeepAliveService.kt  # 生成回答期间的前台服务
 │   │   ├── audio/WavRecorder.kt    # AudioRecord → 16bit PCM WAV
 │   │   └── ui/                     # Compose：聊天页、消息卡、Markdown、输入区、设置
 │   ├── res/…                       # 图标（麦克风矢量图）等资源
@@ -162,12 +173,12 @@ cd android
 
 ## 已知缺口
 
-- **TTS 朗读**：官方 TTS 支持 WebSocket 边生成边合成，两个平台都还没接。
-- **相册选图**：现在图片走文件接口当文档解析，不是真正的 `image` block。
-- **Markdown 边界**：标题/代码块/列表/引用/粗斜体/行内代码/链接都有，表格、Mermaid、LaTeX 没做。
-- **暗色主题**：目前只有浅色。
+- **TTS 朗读**：官方 TTS 支持 WebSocket 边生成边合成，还没接（安卓与鸿蒙都没有）。
+- **图片视觉理解**：现在图片走文件接口当文档解析（OCR + 版面），不是真正的 `image` block。
+- **Markdown 边界**：标题/代码块/列表/引用/表格/粗斜体/行内代码/链接都有了，**Mermaid 没做**（要引 WebView）；LaTeX 是 Unicode 简版，不是完整排版引擎。
 - **长会话性能**：每条 delta 刷新最后一条消息，几千条消息的长会话需要懒加载/分页。
-- **多端同步**：会话只在本地。
+- **多端同步**：会话只在本地（可手动导出/导入 JSON）。
+- **鸿蒙版**：功能冻结在 v0.1 状态，未同步安卓端后续改动。
 
 ## 卓易通 / 兼容层注意
 

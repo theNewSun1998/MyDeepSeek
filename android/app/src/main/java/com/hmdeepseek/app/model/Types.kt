@@ -40,6 +40,28 @@ data class Attachment(
     val errorText: String = ""
 )
 
+/** 单轮回答的用量（来自服务端 usage） */
+data class UsageInfo(
+    val inputTokens: Int = 0,
+    val cacheHitTokens: Int = 0,
+    val outputTokens: Int = 0,
+    val searchCount: Int = 0,
+    val fetchCount: Int = 0
+) {
+    val isEmpty: Boolean
+        get() = inputTokens == 0 && outputTokens == 0 && searchCount == 0 && fetchCount == 0
+}
+
+/** 累计用量（本地统计，跨会话） */
+data class UsageStats(
+    val inputTokens: Long = 0L,
+    val cacheHitTokens: Long = 0L,
+    val outputTokens: Long = 0L,
+    val searchCount: Long = 0L,
+    val fetchCount: Long = 0L,
+    val answers: Long = 0L
+)
+
 /**
  * 一条消息。rawContentJson 是服务端原文（含 thinking 的 signature、检索块），
  * 下一轮必须原样回传，否则模型会忘记刚看过的网页。
@@ -56,7 +78,10 @@ data class ChatMessage(
     val rawContentJson: String = "",
     val status: String = "done",
     val errorText: String = "",
-    val createdAt: Long = System.currentTimeMillis()
+    val createdAt: Long = System.currentTimeMillis(),
+    val usage: UsageInfo = UsageInfo(),
+    /** 本轮因超长被自动压缩时，这里放一句给用户看的说明 */
+    val compressedNote: String = ""
 )
 
 data class Conversation(
@@ -64,7 +89,8 @@ data class Conversation(
     val title: String = "新的对话",
     val messages: List<ChatMessage> = emptyList(),
     val createdAt: Long = System.currentTimeMillis(),
-    val updatedAt: Long = System.currentTimeMillis()
+    val updatedAt: Long = System.currentTimeMillis(),
+    val pinned: Boolean = false
 )
 
 data class AppSettings(
@@ -75,7 +101,13 @@ data class AppSettings(
     var searchDefault: Boolean = true,
     var thinkingDefault: Boolean = true,
     var parsePurpose: String = "text_recognition",
-    var systemPrompt: String = ""
+    var systemPrompt: String = "",
+    /** 上下文估算超过这个 token 数就自动压缩早期轮次（0 = 不压缩） */
+    var compressThresholdTokens: Int = 128_000,
+    /** system | light | dark */
+    var themeMode: String = "system",
+    /** 单轮工具调用上限（搜索+抓页），0 = 不限 */
+    var toolCallLimit: Int = 8
 )
 
 data class SendOptions(
@@ -95,6 +127,14 @@ object JsonCodec {
         put("status", m.status)
         put("error", m.errorText)
         put("createdAt", m.createdAt)
+        put("compressedNote", m.compressedNote)
+        put("usage", JSONObject().apply {
+            put("input", m.usage.inputTokens)
+            put("cacheHit", m.usage.cacheHitTokens)
+            put("output", m.usage.outputTokens)
+            put("search", m.usage.searchCount)
+            put("fetch", m.usage.fetchCount)
+        })
         put("citations", JSONArray().apply {
             m.citations.forEach { c ->
                 put(JSONObject().apply {
@@ -142,56 +182,68 @@ object JsonCodec {
         })
     }
 
-    fun messageFromJson(o: JSONObject): ChatMessage = ChatMessage(
-        id = o.optString("id", UUID.randomUUID().toString()),
-        role = o.optString("role", "user"),
-        text = o.optString("text", ""),
-        thinking = o.optString("thinking", ""),
-        thinkingMs = o.optLong("thinkingMs", 0L),
-        rawContentJson = o.optString("raw", ""),
-        status = o.optString("status", "done"),
-        errorText = o.optString("error", ""),
-        createdAt = o.optLong("createdAt", 0L),
-        citations = o.optJSONArray("citations").mapObjects { c ->
-            Citation(c.optString("url"), c.optString("title"), c.optString("citedText"))
-        },
-        steps = o.optJSONArray("steps").mapObjects { s ->
-            SearchStep(
-                kind = s.optString("kind", "search"),
-                action = s.optString("action", "search"),
-                queries = s.optJSONArray("queries").strings(),
-                url = s.optString("url", ""),
-                pattern = s.optString("pattern", ""),
-                fetchTitle = s.optString("fetchTitle", ""),
-                fetchUrl = s.optString("fetchUrl", ""),
-                errorCode = s.optString("errorCode", ""),
-                hits = s.optJSONArray("hits").mapObjects { h ->
-                    SearchHit(
-                        title = h.optString("title", ""),
-                        url = h.optString("url", ""),
-                        siteName = h.optString("siteName", ""),
-                        snippet = h.optString("snippet", ""),
-                        pageAge = h.optString("pageAge", ""),
-                        imageUrl = h.optString("imageUrl", "")
-                    )
-                }
-            )
-        },
-        attachments = o.optJSONArray("attachments").mapObjects { a ->
-            Attachment(
-                fileId = a.optString("fileId", ""),
-                name = a.optString("name", ""),
-                sizeBytes = a.optLong("size", 0L),
-                isImage = a.optBoolean("isImage", false)
-            )
-        }
-    )
+    fun messageFromJson(o: JSONObject): ChatMessage {
+        val usageObj = o.optJSONObject("usage")
+        return ChatMessage(
+            id = o.optString("id", UUID.randomUUID().toString()),
+            role = o.optString("role", "user"),
+            text = o.optString("text", ""),
+            thinking = o.optString("thinking", ""),
+            thinkingMs = o.optLong("thinkingMs", 0L),
+            rawContentJson = o.optString("raw", ""),
+            status = o.optString("status", "done"),
+            errorText = o.optString("error", ""),
+            compressedNote = o.optString("compressedNote", ""),
+            createdAt = o.optLong("createdAt", 0L),
+            usage = if (usageObj == null) UsageInfo() else UsageInfo(
+                inputTokens = usageObj.optInt("input", 0),
+                cacheHitTokens = usageObj.optInt("cacheHit", 0),
+                outputTokens = usageObj.optInt("output", 0),
+                searchCount = usageObj.optInt("search", 0),
+                fetchCount = usageObj.optInt("fetch", 0)
+            ),
+            citations = o.optJSONArray("citations").mapObjects { c ->
+                Citation(c.optString("url"), c.optString("title"), c.optString("citedText"))
+            },
+            steps = o.optJSONArray("steps").mapObjects { s ->
+                SearchStep(
+                    kind = s.optString("kind", "search"),
+                    action = s.optString("action", "search"),
+                    queries = s.optJSONArray("queries").strings(),
+                    url = s.optString("url", ""),
+                    pattern = s.optString("pattern", ""),
+                    fetchTitle = s.optString("fetchTitle", ""),
+                    fetchUrl = s.optString("fetchUrl", ""),
+                    errorCode = s.optString("errorCode", ""),
+                    hits = s.optJSONArray("hits").mapObjects { h ->
+                        SearchHit(
+                            title = h.optString("title", ""),
+                            url = h.optString("url", ""),
+                            siteName = h.optString("siteName", ""),
+                            snippet = h.optString("snippet", ""),
+                            pageAge = h.optString("pageAge", ""),
+                            imageUrl = h.optString("imageUrl", "")
+                        )
+                    }
+                )
+            },
+            attachments = o.optJSONArray("attachments").mapObjects { a ->
+                Attachment(
+                    fileId = a.optString("fileId", ""),
+                    name = a.optString("name", ""),
+                    sizeBytes = a.optLong("size", 0L),
+                    isImage = a.optBoolean("isImage", false)
+                )
+            }
+        )
+    }
 
     fun conversationToJson(c: Conversation): JSONObject = JSONObject().apply {
         put("id", c.id)
         put("title", c.title)
         put("createdAt", c.createdAt)
         put("updatedAt", c.updatedAt)
+        put("pinned", c.pinned)
         put("messages", JSONArray().apply { c.messages.forEach { put(messageToJson(it)) } })
     }
 
@@ -200,6 +252,7 @@ object JsonCodec {
         title = o.optString("title", "新的对话"),
         createdAt = o.optLong("createdAt", 0L),
         updatedAt = o.optLong("updatedAt", 0L),
+        pinned = o.optBoolean("pinned", false),
         messages = o.optJSONArray("messages").mapObjects { messageFromJson(it) }
     )
 
@@ -212,6 +265,9 @@ object JsonCodec {
         put("thinkingDefault", s.thinkingDefault)
         put("parsePurpose", s.parsePurpose)
         put("systemPrompt", s.systemPrompt)
+        put("compressThresholdTokens", s.compressThresholdTokens)
+        put("themeMode", s.themeMode)
+        put("toolCallLimit", s.toolCallLimit)
     }
 
     fun settingsFromJson(o: JSONObject): AppSettings = AppSettings(
@@ -222,7 +278,28 @@ object JsonCodec {
         searchDefault = o.optBoolean("searchDefault", true),
         thinkingDefault = o.optBoolean("thinkingDefault", true),
         parsePurpose = o.optString("parsePurpose", "text_recognition"),
-        systemPrompt = o.optString("systemPrompt", "")
+        systemPrompt = o.optString("systemPrompt", ""),
+        compressThresholdTokens = o.optInt("compressThresholdTokens", 128_000),
+        themeMode = o.optString("themeMode", "system"),
+        toolCallLimit = o.optInt("toolCallLimit", 8)
+    )
+
+    fun usageStatsToJson(u: UsageStats): JSONObject = JSONObject().apply {
+        put("inputTokens", u.inputTokens)
+        put("cacheHitTokens", u.cacheHitTokens)
+        put("outputTokens", u.outputTokens)
+        put("searchCount", u.searchCount)
+        put("fetchCount", u.fetchCount)
+        put("answers", u.answers)
+    }
+
+    fun usageStatsFromJson(o: JSONObject): UsageStats = UsageStats(
+        inputTokens = o.optLong("inputTokens", 0L),
+        cacheHitTokens = o.optLong("cacheHitTokens", 0L),
+        outputTokens = o.optLong("outputTokens", 0L),
+        searchCount = o.optLong("searchCount", 0L),
+        fetchCount = o.optLong("fetchCount", 0L),
+        answers = o.optLong("answers", 0L)
     )
 }
 

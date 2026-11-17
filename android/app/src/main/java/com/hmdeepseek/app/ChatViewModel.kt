@@ -16,8 +16,10 @@ import com.hmdeepseek.app.model.Attachment
 import com.hmdeepseek.app.model.ChatMessage
 import com.hmdeepseek.app.model.Conversation
 import com.hmdeepseek.app.model.SendOptions
+import com.hmdeepseek.app.model.UsageStats
 import com.hmdeepseek.app.net.ChatSession
 import com.hmdeepseek.app.net.DeepSeekApi
+import com.hmdeepseek.app.service.KeepAliveService
 import kotlinx.coroutines.launch
 
 class ChatViewModel(app: Application) : AndroidViewModel(app) {
@@ -57,7 +59,12 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 title = t
             }
         },
-        onPersist = { conv -> store.saveConversation(conv) }
+        onPersist = { conv -> store.saveConversation(conv) },
+        onUsage = { info -> store.addUsage(info) },
+        onStreamingChanged = { running ->
+            val ctx = getApplication<Application>()
+            if (running) KeepAliveService.start(ctx) else KeepAliveService.stop(ctx)
+        }
     )
 
     fun load(id: String?) {
@@ -205,6 +212,23 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     fun hasKey(): Boolean = store.hasKey()
 
     fun conversations(): List<Conversation> = store.sorted()
+
+    fun renameConversation(id: String, title: String) = store.rename(id, title)
+
+    fun togglePin(id: String) {
+        val conv = store.find(id) ?: return
+        store.setPinned(id, !conv.pinned)
+    }
+
+    fun isPinned(id: String): Boolean = store.find(id)?.pinned == true
+
+    fun exportJson(): String = store.exportJson()
+
+    fun importJson(text: String): Pair<Int, Int> = store.importJson(text)
+
+    fun usageStats(): UsageStats = store.usage
+
+    fun resetUsage() = store.resetUsage()
 
     /** 侧边栏搜索：标题 + 消息正文 */
     fun searchConversations(query: String): List<Conversation> = store.search(query)
