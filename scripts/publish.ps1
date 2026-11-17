@@ -21,7 +21,7 @@
 [CmdletBinding()]
 param(
     [string]$Owner = 'theNewSun1998',
-    [string]$Repo = 'hmdeepseek',
+    [string]$Repo = 'MyDeepSeek',
     [ValidateSet('public', 'private')]
     [string]$Visibility = 'public',
     [string]$Tag = 'v0.1.0',

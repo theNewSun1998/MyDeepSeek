@@ -21,7 +21,7 @@
 [CmdletBinding()]
 param(
     [string]$Owner = 'theNewSun1998',
-    [string]$Repo = 'hmdeepseek',
+    [string]$Repo = 'MyDeepSeek',
     [ValidateSet('https', 'ssh')]
     [string]$Method = 'https',
     [string]$SshKey = "$env:USERPROFILE\.ssh\arkham_deploy",
