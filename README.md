@@ -14,7 +14,7 @@
 ## 下载安装
 
 
-**现成 APK：[`dist/hmdeepseek-debug.apk`](dist/hmdeepseek-debug.apk)**（9.35 MB）
+**现成 APK：[`dist/hmdeepseek-debug.apk`](dist/hmdeepseek-debug.apk)**（9.31 MB）
 
 | 项 | 值 |
 | --- | --- |
@@ -23,7 +23,7 @@
 | 版本 | 0.3.2（versionCode 5） |
 | 适用 | Android 8.0+（`minSdk 26`），`targetSdk 34` |
 | 签名 | debug（`CN=Android Debug`，证书 SHA-256 `8526c771…`）；与 CI 产出的包同一张证书，可互相覆盖升级 |
-| SHA256 | `29C0A8BF76ECE3BD718F25FE162B657D14D0841FE2B8F38782E41F705B61A307` |
+| SHA256 | `E63E8180C6752D37D4980E1476ECE524CF46E2107EFEEC4854657D8ECE3E0A75` |
 
 安装方式任选：
 
