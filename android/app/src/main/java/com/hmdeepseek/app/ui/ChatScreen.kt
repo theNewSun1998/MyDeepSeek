@@ -347,7 +347,13 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     vm.attachments.forEachIndexed { index, att: Attachment ->
-                        AttachmentChip(att = att, onRemove = { vm.removeAttachment(index) })
+                        AttachmentChip(
+                            att = att,
+                            progress = if (att.uploading) vm.uploadProgress else -1,
+                            onRemove = {
+                                if (att.uploading) vm.cancelUpload() else vm.removeAttachment(index)
+                            }
+                        )
                     }
                     Spacer(Modifier.weight(1f))
                 }
@@ -363,12 +369,14 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
                 recording = vm.recording,
                 canSend = draft.text.trim().isNotEmpty() || vm.attachments.isNotEmpty(),
                 onSend = {
-                    if (!vm.hasKey()) {
-                        onOpenSettings()
-                    } else {
-                        vm.send(draft.text) { onOpenSettings() }
-                        draft = TextFieldValue("")
-                        dismissInput()   // 发完就收起键盘，退出输入状态
+                    when {
+                        vm.uploading -> Toast.makeText(context, "文件还在上传，等进度走完再发", Toast.LENGTH_SHORT).show()
+                        !vm.hasKey() -> onOpenSettings()
+                        else -> {
+                            vm.send(draft.text) { onOpenSettings() }
+                            draft = TextFieldValue("")
+                            dismissInput()   // 发完就收起键盘，退出输入状态
+                        }
                     }
                 },
                 onStop = { vm.stop() },
@@ -455,6 +463,11 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
                 TextButton(onClick = { renameTarget = null }) { Text("取消") }
             }
         )
+    }
+
+    LaunchedEffect(vm.transientNotice) {
+        val notice = vm.consumeNotice() ?: return@LaunchedEffect
+        Toast.makeText(context, notice, Toast.LENGTH_LONG).show()
     }
 
     LaunchedEffect(vm.pendingTranscript) {
@@ -655,7 +668,7 @@ private fun DrawerItem(
 }
 
 @Composable
-private fun AttachmentChip(att: Attachment, onRemove: () -> Unit) {
+private fun AttachmentChip(att: Attachment, progress: Int, onRemove: () -> Unit) {
     Row(
         modifier = Modifier
             .clip(RoundedCornerShape(12.dp))
@@ -665,18 +678,23 @@ private fun AttachmentChip(att: Attachment, onRemove: () -> Unit) {
     ) {
         Text(
             text = when {
-                att.uploading -> "解析中…"
-                att.errorText.isNotEmpty() -> "解析失败"
+                att.uploading -> if (progress >= 0) "上传 $progress%" else "上传中…"
+                att.errorText.isNotEmpty() -> att.errorText
                 else -> att.name
             },
             fontSize = 11.sp,
             color = if (att.errorText.isNotEmpty()) AppColor.danger else AppColor.textSub,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.width(110.dp)
+            modifier = Modifier.width(160.dp)
         )
         Spacer(Modifier.width(6.dp))
-        Text("✕", fontSize = 11.sp, color = AppColor.textFaint, modifier = Modifier.clickable { onRemove() })
+        Text(
+            text = if (att.uploading) "取消" else "✕",
+            fontSize = 11.sp,
+            color = AppColor.textFaint,
+            modifier = Modifier.clickable { onRemove() }
+        )
     }
 }
 

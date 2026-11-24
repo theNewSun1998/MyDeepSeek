@@ -51,6 +51,8 @@ private val SAFETY_LABELS = listOf("关闭（仅自己用）", "低", "中", "�
 private val SAFETY_VALUES = listOf("off", "low", "medium", "high")
 private val THEME_LABELS = listOf("跟随系统", "浅色", "深色")
 private val THEME_VALUES = listOf("system", "light", "dark")
+private val COMPRESS_LABELS = listOf("16k（约 30 轮）", "32k（约 60 轮）", "64k", "128k", "不限")
+private val COMPRESS_VALUES = listOf(16_000, 32_000, 64_000, 128_000, 0)
 
 @Composable
 fun SettingsScreen(onBack: () -> Unit) {
@@ -88,8 +90,7 @@ fun SettingsScreen(onBack: () -> Unit) {
         usage = vm.usageStats()
     }
 
-    fun persist() {
-        vm.updateSettings { s ->
+    fun persist() {        vm.updateSettings { s ->
             s.apiKey = apiKey.trim()
             s.baseUrl = baseUrl.trim().ifEmpty { "https://api.deepseek.com" }
             s.model = model.trim().ifEmpty { "deepseek-flash" }
@@ -99,10 +100,16 @@ fun SettingsScreen(onBack: () -> Unit) {
             s.searchDefault = searchDefault
             s.thinkingDefault = thinkingDefault
             s.parsePurpose = if (richLayout) "rich_layout_recognition" else "text_recognition"
-            s.compressThresholdTokens = compressLine.toIntOrNull() ?: 128_000
+            s.compressThresholdTokens = (compressLine.toIntOrNull() ?: 32_000).coerceAtLeast(0)
             s.toolCallLimit = toolLimit.toIntOrNull() ?: 8
         }
         ThemeSignal.mode = themeMode
+    }
+
+    fun compressIndex(): Int {
+        val value = compressLine.toIntOrNull() ?: 32_000
+        val idx = COMPRESS_VALUES.indexOf(value)
+        return if (idx >= 0) idx else 1
     }
 
     Column(modifier = Modifier.fillMaxSize().background(AppColor.bg)) {
@@ -249,14 +256,19 @@ fun SettingsScreen(onBack: () -> Unit) {
                     persist()
                 }
             )
-            NumberRow(
-                label = "上下文压缩线（token）",
-                value = compressLine,
-                hint = "历史估算超过它就把最早的消息省略；0 = 不压缩（默认 128000）",
-                onChange = {
-                    compressLine = it
+            OptionRow(
+                label = "上下文压缩线",
+                labels = COMPRESS_LABELS,
+                selected = compressIndex(),
+                onSelect = { index ->
+                    compressLine = COMPRESS_VALUES[index].toString()
                     persist()
                 }
+            )
+            Text(
+                text = "超过后一次性丢到 40%，之后前缀稳定、缓存更容易命中；「不限」= 永不压缩（官方上下文 1M）",
+                fontSize = 10.sp,
+                color = AppColor.textFaint
             )
 
             SectionTitle("附件解析")
@@ -314,7 +326,8 @@ private fun UsageCard(usage: UsageStats, onReset: () -> Unit) {
             Text(Pricing.formatUsd(cost), fontSize = 15.sp, fontWeight = FontWeight.Medium, color = AppColor.brand)
         }
         Text(
-            text = "输入 ${Pricing.formatTokens(usage.inputTokens)}（缓存命中 ${Pricing.formatTokens(usage.cacheHitTokens)}）" +
+            text = "输入 ${Pricing.formatTokens(Pricing.totalInputTokens(usage))}" +
+                "（缓存命中 ${Pricing.percent(Pricing.cacheHitRatio(usage))}）" +
                 " · 输出 ${Pricing.formatTokens(usage.outputTokens)}",
             fontSize = 11.sp,
             color = AppColor.textSub

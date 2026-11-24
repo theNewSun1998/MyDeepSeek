@@ -59,6 +59,11 @@ class ChatSession(
     private var lastBody: String = ""
     private var attempts: Int = 0
     private var compressionNote: String = ""
+    private var compressionSystemNote: String = ""
+    private var anchorQuestion: String = ""
+
+    /** 已压缩掉的起点（messages 下标）。固定不动直到窗口本身又超线，保证前缀稳定 */
+    private var compactedStart: Int = 0
 
     /** UI 线程发消息、IO 线程收流式，所有状态改动都过这把锁 */
     private val lock = Any()
@@ -77,6 +82,9 @@ class ChatSession(
         createdAt = conv.createdAt
         messages = conv.messages.toMutableList()
         streaming = false
+        compactedStart = 0
+        compressionSystemNote = ""
+        anchorQuestion = ""
         resetAccumulators()
         onSnapshot(messages.toList(), false, title)
     }
@@ -121,7 +129,7 @@ class ChatSession(
             streaming = false
             commitUsage()
             if (messages.isNotEmpty() && messages.last().role == "assistant") {
-                messages[messages.size - 1] = messages.last().copy(status = "stopped")
+                messages[messages.size - 1] = sanitizeIncomplete(messages.last().copy(status = "stopped"))
             }
             persist()
             emit(true)
@@ -162,6 +170,8 @@ class ChatSession(
         fetchCount = 0
         attempts = 0
         compressionNote = ""
+        // 注意：anchorQuestion / compressionSystemNote / compactedStart 不在这里重置。
+        // 它们一旦设定就要在整个会话内保持稳定，否则 system 前缀每轮都在变、缓存命不中。
     }
 
     private fun start(opts: SendOptions) {
@@ -256,7 +266,10 @@ class ChatSession(
 
         val systemParts = mutableListOf<String>()
         if (s.systemPrompt.isNotBlank()) systemParts.add(s.systemPrompt)
-        if (compressionNote.isNotEmpty()) systemParts.add("【提示】$compressionNote")
+        // 注意：这里必须用**固定文案**。之前放了「估算 X → Y tokens」这种每轮都变的数字，
+        // 会导致 system 前缀每轮都不同，前缀缓存永远命不中 —— 与压缩的初衷相反。
+        if (compressionSystemNote.isNotEmpty()) systemParts.add("【提示】$compressionSystemNote")
+        if (anchorQuestion.isNotEmpty()) systemParts.add("【对话起点】用户最初的问题是：$anchorQuestion")
         if (s.toolCallLimit > 0) {
             systemParts.add("【提示】联网工具请尽量在 ${s.toolCallLimit} 次调用内完成。")
         }
@@ -270,37 +283,72 @@ class ChatSession(
     }
 
     /**
-     * 自动压缩：估算整段历史的 token，超过设置阈值就丢掉最早的若干条，
-     * 并保证保留下来的第一条是 user（assistant 不能单独开头）。
+     * 自动压缩（带「压缩起点」，sticky）。
+     *
+     * 关键点：DeepSeek 的前缀缓存要求请求前缀完全一致才命中。
+     * 如果每轮都从全量历史重算尾部窗口，一旦超线，窗口每轮都会往前滑一条 → 前缀每轮都变 → 缓存全废。
+     * 所以这里记住 [compactedStart]：压缩一次后起点固定不动，之后只是把它后面新加的消息接上，
+     * 直到这扇窗口本身又超过阈值，才再跳一次（一次跳到 40%）。
+     * 另外用 system 里一句「对话起点」保住最初的问题，避免直接失忆。
      */
     private fun compressIfNeeded(): List<ChatMessage> {
         compressionNote = ""
         val threshold = settings().compressThresholdTokens
-        if (threshold <= 0) return messages
+        if (threshold <= 0) {
+            compactedStart = 0
+            return messages
+        }
+        if (compactedStart < 0 || compactedStart >= messages.size) compactedStart = 0
 
-        val total = Tokens.estimateMessages(
-            messages.map { if (it.role == "user") it.text else it.text + it.thinking }
+        fun windowTokens(): Int = Tokens.estimateMessages(
+            messages.subList(compactedStart, messages.size).map {
+                if (it.role == "user") it.text else it.text + it.thinking
+            }
         )
-        if (total <= threshold) return messages
 
-        val kept = mutableListOf<ChatMessage>()
+        // 窗口还没超线：直接沿用同一扇窗口（前缀稳定，缓存可命中）
+        if (windowTokens() <= threshold) {
+            return messages.subList(compactedStart, messages.size).toList()
+        }
+
+        // 超线了才跳一次：从尾部收到 40%
+        val target = (threshold * 2 / 5).coerceAtLeast(1500)
+        val keptIndices = mutableListOf<Int>()
         var used = 0
         for (i in messages.indices.reversed()) {
+            if (i < compactedStart) break
             val m = messages[i]
             val t = Tokens.estimate(m.text) + Tokens.estimate(m.thinking) + 8
-            if (kept.isNotEmpty() && used + t > threshold * 3 / 4) break
+            if (keptIndices.isNotEmpty() && used + t > target) break
             used += t
-            kept.add(0, m)
+            keptIndices.add(0, i)
         }
-        if (kept.size >= messages.size) return messages
-        while (kept.isNotEmpty() && kept.first().role != "user") {
-            kept.removeAt(0)
+        // 窗口必须以 user 开头
+        while (keptIndices.isNotEmpty() && messages[keptIndices.first()].role != "user") {
+            keptIndices.removeAt(0)
         }
-        if (kept.isEmpty()) return messages
+        if (keptIndices.isEmpty()) {
+            // 单轮就超目标（比如一个超长回答）：至少保住最后一组问答
+            for (i in messages.indices.reversed()) {
+                if (i < compactedStart) break
+                keptIndices.add(0, i)
+                if (keptIndices.count { messages[it].role == "user" } >= 1 && keptIndices.size >= 2) break
+            }
+            while (keptIndices.isNotEmpty() && messages[keptIndices.first()].role != "user") {
+                keptIndices.removeAt(0)
+            }
+        }
+        if (keptIndices.isEmpty()) return messages
 
-        val dropped = messages.size - kept.size
-        compressionNote = "更早的 $dropped 条消息已省略（估算 $total tokens，超过压缩线 $threshold）"
-        return kept
+        compactedStart = keptIndices.first()
+        val firstUser = messages.firstOrNull { it.role == "user" && it.id != messages[compactedStart].id }
+        if (firstUser != null && firstUser.text.isNotBlank()) {
+            anchorQuestion = firstUser.text.take(300)
+        }
+        val dropped = messages.size - keptIndices.size
+        compressionNote = "为控制上下文，较早的 $dropped 条消息已省略（窗口约 $used tokens，压缩线 $threshold）"
+        compressionSystemNote = "更早的对话已省略，只保留最近的部分。"
+        return messages.subList(compactedStart, messages.size).toList()
     }
 
     private fun messagesJson(history: List<ChatMessage>): String {
@@ -542,10 +590,12 @@ class ChatSession(
         if (messages.isNotEmpty() && messages.last().role == "assistant") {
             val last = messages.last()
             val empty = last.text.isEmpty() && last.thinking.isEmpty() && last.steps.isEmpty()
-            messages[messages.size - 1] = last.copy(
-                status = if (empty && status == "done") "error" else status,
-                errorText = if (empty && status == "done") "没有收到内容，换个说法或关掉联网再试。" else last.errorText,
-                compressedNote = note.ifEmpty { compressionNote }
+            messages[messages.size - 1] = sanitizeIncomplete(
+                last.copy(
+                    status = if (empty && status == "done") "error" else status,
+                    errorText = if (empty && status == "done") "没有收到内容，换个说法或关掉联网再试。" else last.errorText,
+                    compressedNote = note.ifEmpty { compressionNote }
+                )
             )
         }
         commitUsage()
@@ -556,8 +606,9 @@ class ChatSession(
 
     private fun fail(message: String) {
         if (messages.isNotEmpty() && messages.last().role == "assistant") {
-            messages[messages.size - 1] = messages.last()
-                .copy(status = "error", errorText = message)
+            messages[messages.size - 1] = sanitizeIncomplete(
+                messages.last().copy(status = "error", errorText = message)
+            )
         }
         streaming = false
         call?.cancel()
@@ -569,8 +620,25 @@ class ChatSession(
         onStreamingChanged(false)
     }
 
-    private fun emit(force: Boolean) {
-        val now = System.currentTimeMillis()
+    /**
+     * 未正常结束（停止 / 出错）的回答里，thinking 块的 signature 可能是残缺的；
+     * 原样回传下一轮会被服务端判成非法块（400）。这里把 thinking 剔掉，只留正文和工具块。
+     */
+    private fun sanitizeIncomplete(msg: ChatMessage): ChatMessage {
+        if (msg.role != "assistant") return msg
+        if (msg.status == "done" || msg.status == "refused") return msg
+        if (msg.rawContentJson.length < 3) return msg
+        val arr = runCatching { org.json.JSONArray(msg.rawContentJson) }.getOrNull() ?: return msg
+        val kept = org.json.JSONArray()
+        for (i in 0 until arr.length()) {
+            val o = arr.optJSONObject(i) ?: continue
+            if (o.optString("type") == "thinking") continue
+            kept.put(o)
+        }
+        return msg.copy(rawContentJson = kept.toString())
+    }
+
+    private fun emit(force: Boolean) {        val now = System.currentTimeMillis()
         if (!force && now - lastEmit < 60) return
         lastEmit = now
         onSnapshot(messages.toList(), streaming, title)

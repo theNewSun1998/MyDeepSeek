@@ -103,7 +103,7 @@ data class AppSettings(
     var parsePurpose: String = "text_recognition",
     var systemPrompt: String = "",
     /** 上下文估算超过这个 token 数就自动压缩早期轮次（0 = 不压缩） */
-    var compressThresholdTokens: Int = 128_000,
+    var compressThresholdTokens: Int = 32_000,
     /** system | light | dark */
     var themeMode: String = "system",
     /** 单轮工具调用上限（搜索+抓页），0 = 不限 */
@@ -257,6 +257,7 @@ object JsonCodec {
     )
 
     fun settingsToJson(s: AppSettings): JSONObject = JSONObject().apply {
+        put("schema", 2)
         put("apiKey", s.apiKey)
         put("baseUrl", s.baseUrl)
         put("model", s.model)
@@ -270,19 +271,24 @@ object JsonCodec {
         put("toolCallLimit", s.toolCallLimit)
     }
 
-    fun settingsFromJson(o: JSONObject): AppSettings = AppSettings(
-        apiKey = o.optString("apiKey", ""),
-        baseUrl = o.optString("baseUrl", "https://api.deepseek.com"),
-        model = o.optString("model", "deepseek-flash"),
-        safetyLevel = o.optString("safetyLevel", "high"),
-        searchDefault = o.optBoolean("searchDefault", true),
-        thinkingDefault = o.optBoolean("thinkingDefault", true),
-        parsePurpose = o.optString("parsePurpose", "text_recognition"),
-        systemPrompt = o.optString("systemPrompt", ""),
-        compressThresholdTokens = o.optInt("compressThresholdTokens", 128_000),
-        themeMode = o.optString("themeMode", "system"),
-        toolCallLimit = o.optInt("toolCallLimit", 8)
-    )
+    fun settingsFromJson(o: JSONObject): AppSettings {
+        // schema < 2 是 v0.3.0 及更早写下的，压缩线默认值当时是 128k，直接迁到 32k
+        val schema = o.optInt("schema", 1)
+        val compress = if (schema < 2) 32_000 else o.optInt("compressThresholdTokens", 32_000)
+        return AppSettings(
+            apiKey = o.optString("apiKey", ""),
+            baseUrl = o.optString("baseUrl", "https://api.deepseek.com"),
+            model = o.optString("model", "deepseek-flash"),
+            safetyLevel = o.optString("safetyLevel", "high"),
+            searchDefault = o.optBoolean("searchDefault", true),
+            thinkingDefault = o.optBoolean("thinkingDefault", true),
+            parsePurpose = o.optString("parsePurpose", "text_recognition"),
+            systemPrompt = o.optString("systemPrompt", ""),
+            compressThresholdTokens = compress,
+            themeMode = o.optString("themeMode", "system"),
+            toolCallLimit = o.optInt("toolCallLimit", 8)
+        )
+    }
 
     fun usageStatsToJson(u: UsageStats): JSONObject = JSONObject().apply {
         put("inputTokens", u.inputTokens)

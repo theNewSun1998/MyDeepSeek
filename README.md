@@ -14,16 +14,16 @@
 ## 下载安装
 
 
-**现成 APK：[`dist/hmdeepseek-debug.apk`](dist/hmdeepseek-debug.apk)**（9.30 MB）
+**现成 APK：[`dist/hmdeepseek-debug.apk`](dist/hmdeepseek-debug.apk)**（9.35 MB）
 
 | 项 | 值 |
 | --- | --- |
 | 包名 | `com.hmdeepseek.app` |
 | 应用名 | DeepSeek |
-| 版本 | 0.3.0（versionCode 3） |
+| 版本 | 0.3.2（versionCode 5） |
 | 适用 | Android 8.0+（`minSdk 26`），`targetSdk 34` |
 | 签名 | debug（`CN=Android Debug`，证书 SHA-256 `8526c771…`）；与 CI 产出的包同一张证书，可互相覆盖升级 |
-| SHA256 | `73293B9F54719F98D07CAF1EF62A4919830621D0FFBBEA14AC55E63362077BE8` |
+| SHA256 | `29C0A8BF76ECE3BD718F25FE162B657D14D0841FE2B8F38782E41F705B61A307` |
 
 安装方式任选：
 
@@ -47,15 +47,16 @@
 | 传文件（PDF/Word/PPT/图） | `POST /files` 拿 `file_id` → `document` block（自动带 beta 头） |
 | 语音输入 | 麦克风圆形按钮按住说话，`AudioRecord` 录 16k PCM → 封 WAV → `POST /v1/tools/asr`，转写结果插入光标末尾 |
 | 附件入口 | ＋ 号弹出「拍照 / 相册 / 文件」三个选项（相机走 FileProvider 临时文件） |
+| 大文件上传 | 流式上传（内存只占 64 KB）+ 进度百分比 + 可取消；超 100 MiB 本地直接拦 |
 | 后台保活 | 生成中起前台服务 + 常驻通知，切后台/息屏不中断 |
 | 断线重试 | 网络中断 / 429 / 5xx 自动退避重试 2 次 |
-| 自动压缩 | 历史超「压缩线」就省略最早消息并在 system 里说明；压缩线可在设置里调 |
+| 自动压缩 | 「压缩起点」sticky：只有窗口本身再次超线才跳一次（一次丢到 40%），system 里用**固定文案 + 对话起点**，保证前缀稳定、缓存能命中；压缩线在设置里选档（16k/32k/64k/128k/不限，默认 32k） |
 | 工具上限 | 单轮搜索+抓页超过上限自动收口，防一轮烧太多 |
 | Markdown | 表格、代码高亮、代码块单独复制 |
 | 公式 | LaTeX 简版渲染（`$..$` / `$$..$$`，符号与上下标转 Unicode） |
 | 深色主题 | 跟随系统 / 浅色 / 深色 |
 | 会话整理 | 重命名、置顶；导出 / 导入 JSON 备份 |
-| 用量统计 | 累计 token、搜索/抓页次数，按官网峰谷价折算金额 |
+| 用量统计 | 累计 token（含**缓存命中率**）、搜索/抓页次数，按官网峰谷价折算金额 |
 | 侧边栏 | 左侧抽屉：新建对话、**搜索对话（标题 + 消息正文）**、历史列表、设置入口 |
 | 默认界面 | 启动即新建对话页（欢迎语 + 输入框），与官方 App 一致 |
 | 输入体验 | 发送后自动收起键盘、退出输入状态 |
@@ -167,6 +168,7 @@ cd android
 - **只有 `deepseek-flash` 支持全套工具**，V4-Pro 还没跟上，默认锁死模型名。
 - **附件两步走**：`POST /files`（multipart，字段顺序 `purpose` 再 `file`）拿 `file_id` → 作为 `document` block 进对话；Messages 需要 `anthropic-beta: files-api-2025-04-14`。
 - **ASR 限制**：16-bit PCM WAV 或 Ogg Opus，≤120 秒、≤8 MiB，整段上传、不支持边说边出字。
+- **文件上传上限**：单文件 100 MiB、1000 页，上传需 120 秒内传完、解析 120 秒内完成，每账号并发 15 个；user_data（txt/md/csv/xlsx/epub）原件上限 32 MiB 且免费；单次请求最多引用 20 个文档、文本合计 8 MiB。
 - **省钱**：搜索与抓页各约 \$0.75/千次，文件解析 \$0.225/千页，深度搜索一轮可能调 20 次工具。自用很便宜，公开服务务必给每轮搜索次数设上限。
 
 ---

@@ -165,7 +165,13 @@ class Store private constructor(context: Context) {
                 trimmed.startsWith("[") -> JSONArray(trimmed)
                 else -> {
                     val root = JSONObject(trimmed)
-                    root.optJSONObject("usage")?.let { usage = JsonCodec.usageStatsFromJson(it); saveUsage() }
+                    // 本机已有累计用量时不覆盖，避免导入备份把统计抹掉
+                    root.optJSONObject("usage")?.let {
+                        if (usage.answers == 0L) {
+                            usage = JsonCodec.usageStatsFromJson(it)
+                            saveUsage()
+                        }
+                    }
                     root.optJSONArray("conversations") ?: JSONArray()
                 }
             }

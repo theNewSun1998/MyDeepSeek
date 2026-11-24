@@ -2,6 +2,8 @@ package com.hmdeepseek.app.net
 
 import com.hmdeepseek.app.model.AppSettings
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
@@ -94,32 +96,99 @@ object DeepSeekApi {
         }
     }
 
+    /**
+     * 流式上传文件（不把整个文件读进内存）。
+     *
+     * 之前是「读全文件 → 拼 multipart → 发」，40 MB 的 PDF 峰值能吃掉 150 MB 内存，
+     * 中低端机上直接 OOM，表现就是「文件太大」。现在改成固定长度流式写：
+     * 内存只占 64 KB 一块，同时能回报上传进度。
+     */
     suspend fun uploadFile(
         settings: AppSettings,
-        bytes: ByteArray,
         fileName: String,
-        purpose: String
+        fileSize: Long,
+        purpose: String,
+        openStream: () -> java.io.InputStream,
+        onProgress: (sent: Long, total: Long) -> Unit = { _, _ -> }
     ): UploadResult = withContext(Dispatchers.IO) {
+        var conn: HttpURLConnection? = null
+        var stream: java.io.InputStream? = null
         try {
             val boundary = "----dshm" + UUID.randomUUID().toString().replace("-", "")
-            val body = buildMultipart(boundary, listOf("purpose" to purpose), "file", fileName, bytes)
-            val text = postBytes(
-                url = "${baseUrl(settings)}/files",
-                settings = settings,
-                contentType = "multipart/form-data; boundary=$boundary",
-                body = body,
-                timeoutMs = 200_000
-            )
+            val head = buildString {
+                append("--$boundary\r\n")
+                append("Content-Disposition: form-data; name=\"purpose\"\r\n\r\n")
+                append(purpose).append("\r\n")
+                append("--$boundary\r\n")
+                append("Content-Disposition: form-data; name=\"file\"; filename=\"")
+                append(fileName.replace("\"", "_")).append("\"\r\n")
+                append("Content-Type: application/octet-stream\r\n\r\n")
+            }.toByteArray(Charsets.UTF_8)
+            val tail = "\r\n--$boundary--\r\n".toByteArray(Charsets.UTF_8)
+            val total = head.size.toLong() + fileSize + tail.size
+
+            conn = (URL("${baseUrl(settings)}/files").openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = 30_000
+                readTimeout = uploadTimeout(fileSize)
+                doOutput = true
+                if (fileSize > 0) {
+                    setFixedLengthStreamingMode(total)
+                } else {
+                    // 拿不到文件大小时退回 chunked，避免 Content-Length 与实际字节数不符
+                    setChunkedStreamingMode(64 * 1024)
+                }
+                setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
+                setRequestProperty("x-api-key", settings.apiKey.trim())
+                setRequestProperty("Authorization", "Bearer ${settings.apiKey.trim()}")
+            }
+
+            conn.outputStream.use { out ->
+                out.write(head)
+                stream = openStream()
+                val buffer = ByteArray(64 * 1024)
+                var sent = 0L
+                while (true) {
+                    // 每块检查一次取消，保证点「取消」能在一块的粒度内生效
+                    kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                    val n = stream!!.read(buffer)
+                    if (n < 0) break
+                    out.write(buffer, 0, n)
+                    sent += n
+                    onProgress(sent, fileSize)
+                }
+                out.write(tail)
+                out.flush()
+            }
+
+            val code = conn.responseCode
+            val text = (if (code in 200..299) conn.inputStream else conn.errorStream)
+                ?.bufferedReader()?.use { it.readText() } ?: ""
+            if (code !in 200..299) {
+                return@withContext UploadResult(error = friendlyError(code, text))
+            }
             val o = JSONObject(text)
             val id = o.optString("id")
             if (id.isEmpty()) {
                 UploadResult(error = o.optJSONObject("error")?.optString("message") ?: "上传失败：没有返回 file_id")
             } else {
-                UploadResult(ok = true, fileId = id, bytes = bytes.size.toLong())
+                UploadResult(ok = true, fileId = id, bytes = fileSize)
             }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
-            UploadResult(error = "上传失败：${e.message ?: "未知错误"}")
+            val msg = e.message ?: e.javaClass.simpleName
+            UploadResult(error = if (msg.contains("cancel", true)) "已取消上传" else "上传失败：$msg")
+        } finally {
+            runCatching { stream?.close() }
+            runCatching { conn?.disconnect() }
         }
+    }
+
+    /** 超时按文件大小放宽：基础 120s，每 MB 加 3s，最多 15 分钟 */
+    private fun uploadTimeout(fileSize: Long): Int {
+        val extra = (fileSize / (1024 * 1024) * 3_000).toInt()
+        return (120_000 + extra).coerceIn(120_000, 900_000)
     }
 
     suspend fun transcribe(settings: AppSettings, wav: ByteArray): String = withContext(Dispatchers.IO) {
@@ -175,10 +244,20 @@ object DeepSeekApi {
         return when (code) {
             401 -> "API Key 无效或已过期（401），去设置里检查一下。"
             402 -> "账户余额不足（402）。"
+            408 -> "上传超时（408）：服务端要求 120 秒内传完，文件太大或网络太慢，建议压缩或拆分文件。"
+            413 -> "文件超过 100 MiB（413）：服务端单文件上限就是 100 MiB，请压缩或拆分。"
             429 -> "请求太频繁或并发超限（429），稍等再试。"
+            503 -> "服务繁忙（503），过一会儿再试。"
+            504 -> "解析超时（504）：文件页数可能太多（上限 1000 页）或解析太慢，建议拆分后再传。"
             else -> "HTTP $code：${msg.take(300)}"
         }
     }
+
+    /** 单文件上限（服务端 100 MiB），客户端先拦一道 */
+    const val MAX_UPLOAD_BYTES: Long = 100L * 1024 * 1024
+
+    /** 超过这个体积就提示用户「会比较慢」 */
+    const val SLOW_UPLOAD_BYTES: Long = 20L * 1024 * 1024
 
     private suspend fun postBytes(
         url: String,

@@ -380,14 +380,19 @@ private fun ActionRow(msg: ChatMessage, isLast: Boolean, onRegenerate: () -> Uni
     }
 }
 
-/** 单条回答的用量：↑输入 ↓输出 · 搜索/抓页次数 */
+/** 单条回答的用量：↑输入总量 ↓输出 · 缓存命中率 · 工具次数 */
 private fun usageLine(msg: ChatMessage): String {
     val u = msg.usage
+    val totalInput = (u.inputTokens + u.cacheHitTokens).toLong()
     val sb = StringBuilder()
-    if (u.inputTokens > 0) sb.append("↑").append(Pricing.formatTokens(u.inputTokens.toLong()))
+    if (totalInput > 0) sb.append("↑").append(Pricing.formatTokens(totalInput))
     if (u.outputTokens > 0) {
         if (sb.isNotEmpty()) sb.append(" ")
         sb.append("↓").append(Pricing.formatTokens(u.outputTokens.toLong()))
+    }
+    if (totalInput > 0) {
+        if (sb.isNotEmpty()) sb.append(" · ")
+        sb.append("缓存 ").append(Pricing.percent(Pricing.cacheHitRatio(u)))
     }
     val tools = u.searchCount + u.fetchCount
     if (tools > 0) {

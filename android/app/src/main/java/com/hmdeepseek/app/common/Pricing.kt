@@ -33,18 +33,35 @@ object Pricing {
         return hour in 1..3 || hour in 6..9
     }
 
-    /** 估算累计花费（美元） */
+    /**
+     * 估算累计花费（美元）。
+     * 注意口径：inputTokens 只算未命中缓存的输入，命中部分单列在 cacheHitTokens。
+     */
     fun estimate(stats: UsageStats, peak: Boolean = isPeakNow()): Double {
         val miss = if (peak) INPUT_MISS_PEAK else INPUT_MISS_OFF
         val hit = if (peak) INPUT_HIT_PEAK else INPUT_HIT_OFF
         val out = if (peak) OUTPUT_PEAK else OUTPUT_OFF
-        val inputMissTokens = (stats.inputTokens - stats.cacheHitTokens).coerceAtLeast(0L)
-        val tokenCost = inputMissTokens / 1_000_000.0 * miss +
+        val tokenCost = stats.inputTokens / 1_000_000.0 * miss +
             stats.cacheHitTokens / 1_000_000.0 * hit +
             stats.outputTokens / 1_000_000.0 * out
         val toolCost = stats.searchCount * SEARCH_PER_CALL + stats.fetchCount * FETCH_PER_CALL
         return tokenCost + toolCost
     }
+
+    /** 输入总量（未命中 + 命中） */
+    fun totalInputTokens(stats: UsageStats): Long = stats.inputTokens + stats.cacheHitTokens
+
+    fun cacheHitRatio(stats: UsageStats): Double {
+        val total = totalInputTokens(stats)
+        return if (total <= 0) 0.0 else stats.cacheHitTokens.toDouble() / total
+    }
+
+    fun cacheHitRatio(info: com.hmdeepseek.app.model.UsageInfo): Double {
+        val total = (info.inputTokens + info.cacheHitTokens).toLong()
+        return if (total <= 0) 0.0 else info.cacheHitTokens.toDouble() / total
+    }
+
+    fun percent(ratio: Double): String = String.format(Locale.US, "%.0f%%", ratio * 100)
 
     fun formatUsd(value: Double): String {
         if (value <= 0.0) return "$0"
@@ -59,6 +76,14 @@ object Pricing {
             value < 1_000_000 -> String.format(Locale.US, "%.1fK", value / 1000.0)
             else -> String.format(Locale.US, "%.2fM", value / 1_000_000.0)
         }
+    }
+
+    fun humanSize(bytes: Long): String = when {
+        bytes <= 0 -> "未知大小"
+        bytes < 1024 -> "$bytes B"
+        bytes < 1024 * 1024 -> String.format(Locale.US, "%.0f KB", bytes / 1024.0)
+        bytes < 1024L * 1024 * 1024 -> String.format(Locale.US, "%.1f MB", bytes / 1024.0 / 1024.0)
+        else -> String.format(Locale.US, "%.2f GB", bytes / 1024.0 / 1024.0 / 1024.0)
     }
 }
 
